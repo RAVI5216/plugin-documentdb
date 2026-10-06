@@ -40,7 +40,7 @@ import lombok.experimental.SuperBuilder;
                 tasks:
                   - id: delete_user
                     type: io.kestra.plugin.documentdb.Delete
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     filter:
@@ -58,7 +58,7 @@ import lombok.experimental.SuperBuilder;
                 tasks:
                   - id: delete_inactive_users
                     type: io.kestra.plugin.documentdb.Delete
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     filter:
@@ -78,7 +78,7 @@ import lombok.experimental.SuperBuilder;
                 tasks:
                   - id: cleanup_old_logs
                     type: io.kestra.plugin.documentdb.Delete
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/logging?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "logging"
                     collection: "application_logs"
                     filter:
@@ -114,39 +114,40 @@ public class Delete extends AbstractDocumentDBTask implements RunnableTask<Delet
 
         // Render properties
         String rConnectionString = runContext.render(this.connectionString).as(String.class).orElseThrow();
+        String rCaCertificate = this.caCertificate == null ? null : runContext.render(this.caCertificate).as(String.class).orElse(null);
         String rDatabase = runContext.render(this.database).as(String.class).orElseThrow();
         String rCollection = runContext.render(this.collection).as(String.class).orElseThrow();
         Map<String, Object> rFilter = runContext.render(this.filter).asMap(String.class, Object.class);
         Boolean rDeleteMany = runContext.render(this.deleteMany).as(Boolean.class).orElse(false);
 
-        DocumentDBClient client = new DocumentDBClient(rConnectionString);
+        try (DocumentDBClient client = new DocumentDBClient(rConnectionString, rCaCertificate)) {
+            if (rDeleteMany) {
+                // Delete multiple documents
+                logger.info("Deleting multiple documents from DocumentDB database: {} collection: {}", rDatabase, rCollection);
 
-        if (rDeleteMany) {
-            // Delete multiple documents
-            logger.info("Deleting multiple documents from DocumentDB database: {} collection: {}", rDatabase, rCollection);
+                DeleteResult result = client.deleteMany(rDatabase, rCollection, rFilter);
 
-            DeleteResult result = client.deleteMany(rDatabase, rCollection, rFilter);
+                logger.info("Successfully deleted {} documents", result.getDeletedCount());
 
-            logger.info("Successfully deleted {} documents", result.getDeletedCount());
-
-            return Output.builder()
-                .deletedCount(result.getDeletedCount())
-                .build();
-        } else {
-            // Delete single document
-            logger.info("Deleting single document from DocumentDB database: {} collection: {}", rDatabase, rCollection);
-
-            DeleteResult result = client.deleteOne(rDatabase, rCollection, rFilter);
-
-            if (result.getDeletedCount() > 0) {
-                logger.info("Successfully deleted {} document", result.getDeletedCount());
+                return Output.builder()
+                    .deletedCount(result.getDeletedCount())
+                    .build();
             } else {
-                logger.info("No documents matched the filter criteria for deletion");
-            }
+                // Delete single document
+                logger.info("Deleting single document from DocumentDB database: {} collection: {}", rDatabase, rCollection);
 
-            return Output.builder()
-                .deletedCount(result.getDeletedCount())
-                .build();
+                DeleteResult result = client.deleteOne(rDatabase, rCollection, rFilter);
+
+                if (result.getDeletedCount() > 0) {
+                    logger.info("Successfully deleted {} document", result.getDeletedCount());
+                } else {
+                    logger.info("No documents matched the filter criteria for deletion");
+                }
+
+                return Output.builder()
+                    .deletedCount(result.getDeletedCount())
+                    .build();
+            }
         }
     }
 

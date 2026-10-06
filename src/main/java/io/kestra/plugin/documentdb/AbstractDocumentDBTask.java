@@ -24,11 +24,18 @@ public abstract class AbstractDocumentDBTask extends Task {
 
     @Schema(
         title = "MongoDB connection string",
-        description = "MongoDB connection string for the target database, for example mongodb://user:password@host:27017/database?authSource=admin."
+        description = "MongoDB connection string for the target database, for example: mongodb://<user>:<password>@<cluster>.docdb.amazonaws.com:27017/?tls=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"
     )
     @NotNull
     @PluginProperty(group = "main", secret = true)
     protected Property<String> connectionString;
+
+    @Schema(
+        title = "CA certificate",
+        description = "PEM-encoded CA certificate used to verify the TLS connection to DocumentDB."
+    )
+    @PluginProperty(group = "connection", secret = true)
+    protected Property<String> caCertificate;
 
     @Schema(
         title = "Target database",

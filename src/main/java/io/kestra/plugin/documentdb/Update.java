@@ -42,7 +42,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: update_user
                     type: io.kestra.plugin.documentdb.Update
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     filter:
@@ -64,7 +64,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: update_inactive_users
                     type: io.kestra.plugin.documentdb.Update
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     filter:
@@ -87,7 +87,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: increment_views
                     type: io.kestra.plugin.documentdb.Update
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "profiles"
                     filter:
@@ -134,6 +134,7 @@ public class Update extends AbstractDocumentDBTask implements RunnableTask<Updat
 
         // Render properties
         String rConnectionString = runContext.render(this.connectionString).as(String.class).orElseThrow();
+        String rCaCertificate = this.caCertificate == null ? null : runContext.render(this.caCertificate).as(String.class).orElse(null);
         String rDatabase = runContext.render(this.database).as(String.class).orElseThrow();
         String rCollection = runContext.render(this.collection).as(String.class).orElseThrow();
         Map<String, Object> rFilter = runContext.render(this.filter).asMap(String.class, Object.class);
@@ -145,38 +146,38 @@ public class Update extends AbstractDocumentDBTask implements RunnableTask<Updat
             throw new IllegalArgumentException("Update operations must be provided");
         }
 
-        DocumentDBClient client = new DocumentDBClient(rConnectionString);
+        try (DocumentDBClient client = new DocumentDBClient(rConnectionString, rCaCertificate)) {
+            if (rUpdateMany) {
+                // Update multiple documents
+                logger.info("Updating multiple documents in DocumentDB database: {} collection: {}", rDatabase, rCollection);
 
-        if (rUpdateMany) {
-            // Update multiple documents
-            logger.info("Updating multiple documents in DocumentDB database: {} collection: {}", rDatabase, rCollection);
+                UpdateResult result = client.updateMany(rDatabase, rCollection, rFilter, rUpdate);
 
-            UpdateResult result = client.updateMany(rDatabase, rCollection, rFilter, rUpdate);
-
-            logger.info("Successfully updated {} of {} matching documents", result.getModifiedCount(), result.getMatchedCount());
-
-            return Output.builder()
-                .matchedCount(result.getMatchedCount())
-                .modifiedCount(result.getModifiedCount())
-                .upsertedId(result.getUpsertedId())
-                .build();
-        } else {
-            // Update single document
-            logger.info("Updating single document in DocumentDB database: {} collection: {}", rDatabase, rCollection);
-
-            UpdateResult result = client.updateOne(rDatabase, rCollection, rFilter, rUpdate);
-
-            if (result.getModifiedCount() > 0) {
                 logger.info("Successfully updated {} of {} matching documents", result.getModifiedCount(), result.getMatchedCount());
-            } else {
-                logger.info("No documents were modified (matched: {})", result.getMatchedCount());
-            }
 
-            return Output.builder()
-                .matchedCount(result.getMatchedCount())
-                .modifiedCount(result.getModifiedCount())
-                .upsertedId(result.getUpsertedId())
-                .build();
+                return Output.builder()
+                    .matchedCount(result.getMatchedCount())
+                    .modifiedCount(result.getModifiedCount())
+                    .upsertedId(result.getUpsertedId())
+                    .build();
+            } else {
+                // Update single document
+                logger.info("Updating single document in DocumentDB database: {} collection: {}", rDatabase, rCollection);
+
+                UpdateResult result = client.updateOne(rDatabase, rCollection, rFilter, rUpdate);
+
+                if (result.getModifiedCount() > 0) {
+                    logger.info("Successfully updated {} of {} matching documents", result.getModifiedCount(), result.getMatchedCount());
+                } else {
+                    logger.info("No documents were modified (matched: {})", result.getMatchedCount());
+                }
+
+                return Output.builder()
+                    .matchedCount(result.getMatchedCount())
+                    .modifiedCount(result.getModifiedCount())
+                    .upsertedId(result.getUpsertedId())
+                    .build();
+            }
         }
     }
 

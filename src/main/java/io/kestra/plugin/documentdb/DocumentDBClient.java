@@ -1,23 +1,31 @@
 package io.kestra.plugin.documentdb;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 
 import org.bson.BsonObjectId;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.bson.types.ObjectId;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import com.mongodb.ConnectionString;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
+import com.mongodb.MongoClientSettings;
 
 import io.kestra.plugin.documentdb.models.DeleteResult;
 import io.kestra.plugin.documentdb.models.DocumentDBException;
@@ -28,15 +36,47 @@ import io.kestra.plugin.documentdb.models.UpdateResult;
 /**
  * MongoDB driver-backed client for DocumentDB operations.
  */
-public class DocumentDBClient {
+public class DocumentDBClient implements AutoCloseable {
 
-    private static final Logger logger = LoggerFactory.getLogger(DocumentDBClient.class);
     public static final int MAX_DOCUMENTS_PER_INSERT = 10;
 
     private final MongoClient mongoClient;
 
-    public DocumentDBClient(String connectionString) {
-        this.mongoClient = MongoClients.create(connectionString);
+    public DocumentDBClient(String connectionString, String caCertificate) throws GeneralSecurityException, IOException {
+        MongoClientSettings.Builder settingsBuilder = MongoClientSettings.builder()
+            .applyConnectionString(new ConnectionString(connectionString));
+
+        if (caCertificate != null && !caCertificate.isBlank()) {
+            SSLContext sslContext = createSslContext(caCertificate);
+            settingsBuilder.applyToSslSettings(sslSettings -> sslSettings
+                .enabled(true)
+                .context(sslContext));
+        }
+
+        this.mongoClient = MongoClients.create(settingsBuilder.build());
+    }
+
+    private static SSLContext createSslContext(String caCertificate) throws GeneralSecurityException, IOException {
+        var certificateFactory = java.security.cert.CertificateFactory.getInstance("X.509");
+        var certificate = certificateFactory.generateCertificate(
+            new ByteArrayInputStream(caCertificate.getBytes(StandardCharsets.UTF_8))
+        );
+
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+        trustStore.setCertificateEntry("documentdb-ca", certificate);
+
+        TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trustManagerFactory.init(trustStore);
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustManagerFactory.getTrustManagers(), null);
+        return sslContext;
+    }
+
+    @Override
+    public void close() {
+        mongoClient.close();
     }
 
     public InsertResult insertOne(String database, String collection, Map<String, Object> document) throws Exception {
@@ -178,12 +218,6 @@ public class DocumentDBClient {
                 converted.add(convertValue(item));
             }
             return converted;
-        }
-        if (value instanceof ObjectId) {
-            return value;
-        }
-        if (value instanceof BsonValue) {
-            return value;
         }
         return value;
     }

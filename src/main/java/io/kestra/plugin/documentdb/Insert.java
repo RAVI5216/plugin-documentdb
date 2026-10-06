@@ -44,7 +44,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: insert_user
                     type: io.kestra.plugin.documentdb.Insert
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     document:
@@ -64,7 +64,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: insert_product_batch
                     type: io.kestra.plugin.documentdb.Insert
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/inventory?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "inventory"
                     collection: "products"
                     documents:
@@ -99,7 +99,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: insert_order
                     type: io.kestra.plugin.documentdb.Insert
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/sales?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "sales"
                     collection: "orders"
                     document:
@@ -134,6 +134,7 @@ public class Insert extends AbstractDocumentDBTask implements RunnableTask<Inser
 
         // Render properties
         String rConnectionString = runContext.render(this.connectionString).as(String.class).orElseThrow();
+        String rCaCertificate = this.caCertificate == null ? null : runContext.render(this.caCertificate).as(String.class).orElse(null);
         String rDatabase = runContext.render(this.database).as(String.class).orElseThrow();
         String rCollection = runContext.render(this.collection).as(String.class).orElseThrow();
         Map<String, Object> rDocument = runContext.render(this.document).asMap(String.class, Object.class);
@@ -148,38 +149,38 @@ public class Insert extends AbstractDocumentDBTask implements RunnableTask<Inser
             throw new IllegalArgumentException("Cannot specify both 'document' and 'documents'. Use one or the other.");
         }
 
-        DocumentDBClient client = new DocumentDBClient(rConnectionString);
+        try (DocumentDBClient client = new DocumentDBClient(rConnectionString, rCaCertificate)) {
+            if (rDocument != null && !rDocument.isEmpty()) {
+                // Insert single document
+                logger.info("Inserting single document into DocumentDB database: {} collection: {}", rDatabase, rCollection);
 
-        if (rDocument != null && !rDocument.isEmpty()) {
-            // Insert single document
-            logger.info("Inserting single document into DocumentDB database: {} collection: {}", rDatabase, rCollection);
+                InsertResult result = client.insertOne(rDatabase, rCollection, rDocument);
 
-            InsertResult result = client.insertOne(rDatabase, rCollection, rDocument);
+                logger.info("Successfully inserted document with ID: {}", result.getInsertedIds().getFirst());
 
-            logger.info("Successfully inserted document with ID: {}", result.getInsertedIds().getFirst());
+                return Output.builder()
+                    .insertedId(result.getInsertedIds().getFirst())
+                    .insertedIds(result.getInsertedIds())
+                    .insertedCount(result.getInsertedCount())
+                    .build();
+            } else {
+                // Insert multiple documents
+                if (rDocuments.size() > MAX_DOCUMENTS_PER_INSERT) {
+                    throw new IllegalArgumentException("Cannot insert more than " + MAX_DOCUMENTS_PER_INSERT + " documents at once");
+                }
 
-            return Output.builder()
-                .insertedId(result.getInsertedIds().getFirst())
-                .insertedIds(result.getInsertedIds())
-                .insertedCount(result.getInsertedCount())
-                .build();
-        } else {
-            // Insert multiple documents
-            if (rDocuments.size() > MAX_DOCUMENTS_PER_INSERT) {
-                throw new IllegalArgumentException("Cannot insert more than " + MAX_DOCUMENTS_PER_INSERT + " documents at once");
+                logger.info("Inserting {} documents into DocumentDB database: {} collection: {}", rDocuments.size(), rDatabase, rCollection);
+
+                InsertResult result = client.insertMany(rDatabase, rCollection, rDocuments);
+
+                logger.info("Successfully inserted {} documents", result.getInsertedCount());
+
+                return Output.builder()
+                    .insertedId(result.getInsertedIds().isEmpty() ? null : result.getInsertedIds().getFirst())
+                    .insertedIds(result.getInsertedIds())
+                    .insertedCount(result.getInsertedCount())
+                    .build();
             }
-
-            logger.info("Inserting {} documents into DocumentDB database: {} collection: {}", rDocuments.size(), rDatabase, rCollection);
-
-            InsertResult result = client.insertMany(rDatabase, rCollection, rDocuments);
-
-            logger.info("Successfully inserted {} documents", result.getInsertedCount());
-
-            return Output.builder()
-                .insertedId(result.getInsertedIds().isEmpty() ? null : result.getInsertedIds().getFirst())
-                .insertedIds(result.getInsertedIds())
-                .insertedCount(result.getInsertedCount())
-                .build();
         }
     }
 

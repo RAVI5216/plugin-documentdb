@@ -53,7 +53,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: find_users
                     type: io.kestra.plugin.documentdb.Read
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     fetchType: FETCH
@@ -69,7 +69,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: find_filtered_users
                     type: io.kestra.plugin.documentdb.Read
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     filter:
@@ -90,7 +90,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: find_one_user
                     type: io.kestra.plugin.documentdb.Read
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     filter:
@@ -108,7 +108,7 @@ import io.kestra.core.models.annotations.PluginProperty;
                 tasks:
                   - id: aggregate_users
                     type: io.kestra.plugin.documentdb.Read
-                    connectionString: "mongodb://testuser:testpass@localhost:27017/myapp?authSource=admin"
+                    connectionString: "{{ secret('DOCUMENTDB_CONNECTION_STRING') }}"
                     database: "myapp"
                     collection: "users"
                     aggregationPipeline:
@@ -170,6 +170,7 @@ public class Read extends AbstractDocumentDBTask implements RunnableTask<Read.Ou
 
         // Render properties
         String rConnectionString = runContext.render(this.connectionString).as(String.class).orElseThrow();
+        String rCaCertificate = this.caCertificate == null ? null : runContext.render(this.caCertificate).as(String.class).orElse(null);
         String rDatabase = runContext.render(this.database).as(String.class).orElseThrow();
         String rCollection = runContext.render(this.collection).as(String.class).orElseThrow();
         Map<String, Object> rFilter = runContext.render(this.filter).asMap(String.class, Object.class);
@@ -178,52 +179,52 @@ public class Read extends AbstractDocumentDBTask implements RunnableTask<Read.Ou
         Integer rSkip = runContext.render(this.skip).as(Integer.class).orElse(null);
         FetchType rFetchType = runContext.render(this.fetchType).as(FetchType.class).orElse(FetchType.FETCH);
 
-        DocumentDBClient client = new DocumentDBClient(rConnectionString);
+        try (DocumentDBClient client = new DocumentDBClient(rConnectionString, rCaCertificate)) {
+            List<DocumentDBRecord> records;
 
-        List<DocumentDBRecord> records;
+            if (rAggregationPipeline != null && !rAggregationPipeline.isEmpty()) {
+                // Execute aggregation
+                logger.info(
+                    "Executing aggregation pipeline on DocumentDB database: {} collection: {} with {} stages",
+                    rDatabase, rCollection, rAggregationPipeline.size()
+                );
+                records = client.aggregate(rDatabase, rCollection, rAggregationPipeline);
+            } else {
+                // Execute find
+                logger.info("Finding documents in DocumentDB database: {} collection: {}", rDatabase, rCollection);
+                records = client.find(rDatabase, rCollection, rFilter, rLimit, rSkip);
+            }
 
-        if (rAggregationPipeline != null && !rAggregationPipeline.isEmpty()) {
-            // Execute aggregation
-            logger.info(
-                "Executing aggregation pipeline on DocumentDB database: {} collection: {} with {} stages",
-                rDatabase, rCollection, rAggregationPipeline.size()
-            );
-            records = client.aggregate(rDatabase, rCollection, rAggregationPipeline);
-        } else {
-            // Execute find
-            logger.info("Finding documents in DocumentDB database: {} collection: {}", rDatabase, rCollection);
-            records = client.find(rDatabase, rCollection, rFilter, rLimit, rSkip);
+            logger.info("Found {} documents", records.size());
+
+            // Handle fetchType logic and build output in single switch
+            int recordCount = records.size();
+            Output.OutputBuilder outputBuilder = Output.builder();
+
+            switch (rFetchType) {
+                case FETCH_ONE:
+                    Map<String, Object> row = records.isEmpty() ? null : convertRecordToMap(records.getFirst());
+                    recordCount = records.isEmpty() ? 0 : 1;
+                    outputBuilder.size((long) recordCount).row(row);
+                    break;
+                case NONE:
+                    outputBuilder.size((long) recordCount);
+                    break;
+                case STORE:
+                    StoredResult storedResult = storeRecordsAsFile(runContext, records);
+                    outputBuilder.size((long) recordCount).uri(storedResult.getUri());
+                    break;
+                case FETCH:
+                default:
+                    List<Map<String, Object>> rows = records.stream()
+                        .map(this::convertRecordToMap)
+                        .toList();
+                    outputBuilder.size((long) recordCount).rows(rows);
+                    break;
+            }
+
+            return outputBuilder.build();
         }
-
-        logger.info("Found {} documents", records.size());
-
-        // Handle fetchType logic and build output in single switch
-        int recordCount = records.size();
-        Output.OutputBuilder outputBuilder = Output.builder();
-
-        switch (rFetchType) {
-            case FETCH_ONE:
-                Map<String, Object> row = records.isEmpty() ? null : convertRecordToMap(records.getFirst());
-                recordCount = records.isEmpty() ? 0 : 1;
-                outputBuilder.size((long) recordCount).row(row);
-                break;
-            case NONE:
-                outputBuilder.size((long) recordCount);
-                break;
-            case STORE:
-                StoredResult storedResult = storeRecordsAsFile(runContext, records);
-                outputBuilder.size((long) recordCount).uri(storedResult.getUri());
-                break;
-            case FETCH:
-            default:
-                List<Map<String, Object>> rows = records.stream()
-                    .map(this::convertRecordToMap)
-                    .toList();
-                outputBuilder.size((long) recordCount).rows(rows);
-                break;
-        }
-
-        return outputBuilder.build();
     }
 
     private Map<String, Object> convertRecordToMap(DocumentDBRecord record) {
