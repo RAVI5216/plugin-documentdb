@@ -1,6 +1,5 @@
-version: '3.8'
 services:
-  # Using MongoDB with HTTP interface since DocumentDB is MongoDB-compatible
+  # MongoDB container for integration tests
   mongodb:
     image: mongo:7.0
     ports:
